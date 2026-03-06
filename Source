@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Grok Imagine – Bulk Favorites Downloader v12
+// @name         Grok Imagine – Bulk Favorites Downloader v13
 // @namespace    https://grok.com/
-// @version      12.0.0
+// @version      13.0.0
 // @description  Downloads ALL your Grok Imagine favorites in chunks of 200. Remembers downloads, skips already-downloaded on future runs. Option to save IDs only without downloading.
 // @author       You
 // @match        https://grok.com/imagine*
@@ -42,8 +42,10 @@
   };
 
   // ── Persistent download history ───────────────────────────────────────────
+  // Stored as a JSON array of ID strings in GM storage — survives page reloads.
   function loadHistory() {
     try {
+      // Always store/compare as strings to avoid numeric vs string ID mismatch
       return new Set(JSON.parse(GM_getValue(STORAGE_KEY, '[]')).map(String));
     } catch (_) {
       return new Set();
@@ -141,7 +143,9 @@
   }
 
   // ── Paginate all API pages ────────────────────────────────────────────────
-  async function collectAll(onStatus, history) {
+  // history is optional — if passed, stops early once a full page is already known
+  // maxPages: optional limit on how many API pages to fetch (0 = unlimited)
+  async function collectAll(onStatus, history, maxPages) {
     const bag = new Map();
     let cursor     = null;
     let page       = 1;
@@ -171,8 +175,8 @@
       onStatus(`Page ${page}: +${added} items (total so far: ${bag.size})`);
       console.log('[GrokDL] page', page, '| added:', added, '| nextCursor:', nextCursor);
 
-      // Early-stop: API returns newest-first, so if every item on this page is
-      // already in history, everything on later pages will be too.
+      // Early-stop optimisation: API returns newest-first, so if every item on
+      // this page is already in history, everything on later pages will be too.
       if (history && items.length > 0) {
         const allKnown = items.every(i => history.has(String(i.id)));
         if (allKnown) {
@@ -193,14 +197,16 @@
 
       cursor = nextCursor;
       page++;
+      if (maxPages && page > maxPages) { onStatus(`Page limit reached (${maxPages} page(s) = ${bag.size} items).`); break; }
       await sleep(API_DELAY_MS);
     }
 
     return [...bag.values()];
   }
 
-  // ── Download in chunks ────────────────────────────────────────────────────
+  // ── Download in chunks, skipping already-downloaded IDs ──────────────────
   async function downloadNew(newItems, history, onStatus) {
+
     if (!newItems.length) {
       onStatus('No items to download.');
       return 0;
@@ -229,6 +235,8 @@
 
         if (done % 10 === 0 || done === total) {
           onStatus(`Chunk ${chunkNum}/${chunks} — ${done}/${total} files queued…`);
+          // Save progress to history incrementally so if browser crashes
+          // we don't re-download what already went through
           markDownloaded(history, justDownloaded.splice(0));
         }
 
@@ -245,16 +253,18 @@
       }
     }
 
+    // Final save of any remaining IDs
     if (justDownloaded.length) markDownloaded(history, justDownloaded);
+
     return done;
   }
 
   // ── UI ────────────────────────────────────────────────────────────────────
   function buildUI() {
-    if (document.getElementById('grokdl-v12')) return;
+    if (document.getElementById('grokdl-v13')) return;
 
     const wrap = document.createElement('div');
-    wrap.id = 'grokdl-v12';
+    wrap.id = 'grokdl-v13';
     Object.assign(wrap.style, {
       position: 'fixed', bottom: '20px', right: '20px', zIndex: '2147483647',
       display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px',
@@ -270,6 +280,7 @@
       backdropFilter: 'blur(10px)', boxShadow: '0 4px 24px rgba(0,0,0,0.4)',
     });
 
+    // Main download button
     const btn = document.createElement('button');
     btn.textContent = '⬇ Download New Favorites';
     Object.assign(btn.style, {
@@ -279,6 +290,7 @@
       transition: 'background .15s',
     });
 
+    // Small "reset history" link below the button
     const resetBtn = document.createElement('button');
     resetBtn.textContent = '🗑 Reset download history';
     Object.assign(resetBtn.style, {
@@ -300,7 +312,9 @@
     btn.onmouseenter = () => { if (!btn.disabled) btn.style.background = '#1d4ed8'; };
     btn.onmouseleave = () => { if (!btn.disabled) btn.style.background = _col; };
 
-    function showActionModal(onChoice) {
+    // ── Modal dialog asking what to do ────────────────────────────────────
+    function showActionModal(onChoice) { // onChoice(action, maxPages)
+      // Remove any existing modal
       document.getElementById('grokdl-modal')?.remove();
 
       const overlay = document.createElement('div');
@@ -329,6 +343,27 @@
       sub.textContent = `${history.size} ID(s) in download history`;
       Object.assign(sub.style, { fontSize: '12px', color: '#64748b', marginBottom: '20px' });
 
+      // Optional page limit input
+      const limitWrap = document.createElement('div');
+      Object.assign(limitWrap.style, { marginBottom: '16px' });
+
+      const limitLabel = document.createElement('label');
+      limitLabel.textContent = 'Max pages to fetch (leave blank for all):';
+      Object.assign(limitLabel.style, { fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '5px' });
+
+      const limitInput = document.createElement('input');
+      limitInput.type = 'number';
+      limitInput.min = '1';
+      limitInput.placeholder = 'e.g. 3  =  120 newest items';
+      Object.assign(limitInput.style, {
+        width: '100%', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)',
+        borderRadius: '7px', padding: '7px 10px', color: '#e2e8f0', fontSize: '12px',
+        boxSizing: 'border-box', outline: 'none',
+      });
+
+      limitWrap.appendChild(limitLabel);
+      limitWrap.appendChild(limitInput);
+
       const mkBtn = (label, desc, color, action) => {
         const row = document.createElement('button');
         Object.assign(row.style, {
@@ -350,7 +385,7 @@
 
         row.appendChild(lbl);
         row.appendChild(dsc);
-        row.addEventListener('click', () => { overlay.remove(); onChoice(action); });
+        row.addEventListener('click', () => { const mp = parseInt(limitInput.value, 10); overlay.remove(); onChoice(action, isNaN(mp) || mp < 1 ? 0 : mp); });
         return row;
       };
 
@@ -361,10 +396,11 @@
         cursor: 'pointer', fontSize: '12px', marginTop: '4px',
         display: 'block', width: '100%', textAlign: 'center', padding: '6px',
       });
-      cancelBtn.addEventListener('click', () => { overlay.remove(); onChoice(null); });
+      cancelBtn.addEventListener('click', () => { overlay.remove(); onChoice(null, 0); });
 
       box.appendChild(title);
       box.appendChild(sub);
+      box.appendChild(limitWrap);
       box.appendChild(mkBtn(
         '⬇ Download new favorites',
         'Fetch all favorites, skip ones already downloaded, save the rest',
@@ -382,15 +418,17 @@
       ));
       box.appendChild(cancelBtn);
       overlay.appendChild(box);
-      overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); onChoice(null); } });
+
+      // Close on overlay click
+      overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); onChoice(null, 0); } });
       document.body.appendChild(overlay);
     }
 
     let busy = false;
     btn.addEventListener('click', () => {
       if (busy) return;
-      showActionModal(async (action) => {
-        if (!action) return;
+      showActionModal(async (action, maxPages) => {
+        if (!action) return; // cancelled
 
         busy = true; btn.disabled = true;
         log.style.display = 'block';
@@ -400,18 +438,23 @@
         try {
           const history = loadHistory();
           console.log('[GrokDL] Loaded history, IDs tracked:', history.size, '| sample:', [...history].slice(0,3));
-          setStatus(`Fetching favorites list… (${history.size} previously downloaded)`);
+          setStatus(`Fetching favorites list… (${history.size} previously downloaded)${maxPages ? ` — limited to ${maxPages} page(s) / ~${maxPages * 40} items` : ''}`);
 
-          const allItems = await collectAll(setStatus, action === 'download' ? history : null);
+          const allItems = await collectAll(setStatus, action === 'download' ? history : null, maxPages);
 
           if (action === 'ids_only') {
+            // Mark everything as downloaded without actually downloading
             const newIds = allItems.filter(i => !history.has(i.id)).map(i => i.id);
             markDownloaded(history, newIds);
-            setStatus(`✅ Saved ${newIds.length} new ID(s) to history.\nTotal tracked: ${history.size}.\nNo files were downloaded.`);
+            setStatus(`✅ Saved ${newIds.length} new ID(s) to history.
+Total tracked: ${history.size}.
+No files were downloaded.`);
             btn.textContent = `✅ ${newIds.length} IDs saved`;
             setColor('#a78bfa');
 
           } else {
+            // download or download_all
+            // Debug: log a few IDs to confirm format matches history
             console.log('[GrokDL] Sample fetched IDs:', allItems.slice(0,3).map(i => i.id), '| types:', allItems.slice(0,3).map(i => typeof i.id));
             console.log('[GrokDL] History sample:', [...history].slice(0,3), '| types:', [...history].slice(0,3).map(i => typeof i));
 
@@ -423,7 +466,8 @@
             const newCount = itemsToDownload.length;
 
             if (newCount === 0) {
-              setStatus(`✅ Nothing new! All ${allItems.length} favorites already downloaded.\nGenerate new images, save them, then click again.`);
+              setStatus(`✅ Nothing new! All ${allItems.length} favorites already downloaded.
+Generate new images, save them, then click again.`);
               btn.textContent = '✅ Already up to date';
               setColor('#16a34a');
             } else {
