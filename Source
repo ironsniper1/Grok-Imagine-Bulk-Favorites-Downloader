@@ -204,6 +204,14 @@
     return [...bag.values()];
   }
 
+  function safeFilename(str, max = 60) {
+    return String(str || '')
+      .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, max);
+  }
+
   // ── Download in chunks, skipping already-downloaded IDs ──────────────────
   async function downloadNew(newItems, history, onStatus) {
 
@@ -224,7 +232,12 @@
       onStatus(`Chunk ${chunkNum}/${chunks}: queuing ${chunkItems.length} files…`);
 
       for (const item of chunkItems) {
-        const name = `grok-favorites/${item.date}_${item.id.slice(0, 8)}_${item.model}_${item.prompt}.${item.ext}`;
+
+        const safeModel = safeFilename(item.model, 30);
+        const safePrompt = safeFilename(item.prompt, 60);
+        const safeExt = safeFilename(item.ext, 10) || 'bin';
+        const name = `grok-favorites/${item.id.slice(0, 8)}_${safeModel}_${safePrompt}.${safeExt}`;
+
         GM_download({
           url:     item.url,
           name,
