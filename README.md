@@ -38,7 +38,8 @@ Once both settings are enabled, proceed to installation below.
 ## Features
 
 - **Bulk downloads all favorites** — no limit, grabs everything
-- **Smart early stopping** — since Grok returns favorites newest-first, stops paginating as soon as it hits a full page of already-downloaded items
+- **All generations or favorites only** — download every image and video you generated on Grok Imagine (default), or only your favorites
+- **Smart early stopping** — in favorites mode, since Grok returns favorites newest-first, stops paginating as soon as it hits a full page of already-downloaded items
 - **Chunked downloading** — downloads in batches of 200, pausing between each so your browser doesn't get overwhelmed
 - **Download history** — remembers every downloaded file by ID so repeat runs only fetch new favorites
 - **Media type filter** — choose to download images only, videos only, or both
@@ -85,10 +86,11 @@ Once both settings are enabled, proceed to installation below.
 
 | Setting | What it does |
 |---|---|
-| **Max pages to fetch** | Leave blank for unlimited, or type a number to stop after that many pages (1 page = 40 items) |
+| **What to fetch** | All generations (default) or Favorites only |
+| **Max pages to fetch** | Leave blank for unlimited, or type a number to stop after that many pages (1 page = 60 generations or 40 favorites) |
 | **Media type** | Choose Images & Videos, Images only, or Videos only |
 
-5. Files are saved to your browser's default **Downloads** folder under a `grok-favorites/` subfolder
+5. Files are saved to your browser's default **Downloads** folder under a `grok-imagine/` subfolder (all generations) or a `grok-favorites/` subfolder (favorites and tags)
 
 > **Tip:** Disable "Ask where to save each file" in your browser's download settings, otherwise you'll get a save dialog for every single file.
 
@@ -105,6 +107,14 @@ Body: { limit: 40, filter: { source: "MEDIA_POST_SOURCE_LIKED" }, cursor: "..." 
 ```
 
 This is the same endpoint Grok's own website uses to load your favorites. Because the script runs inside your logged-in browser session, your session cookies are sent automatically — no API key or login needed.
+
+That endpoint only knows favorites and tags. For **All generations** the script reads the asset list instead, which contains every image and video you generated:
+
+```
+GET https://grok.com/rest/assets?pageSize=60&orderBy=ORDER_BY_CREATE_TIME&workspaceKind=WORKSPACE_KIND_IMAGINE_ALL&pageToken=...
+```
+
+It pages through `nextPageToken`, skips deleted assets and Grok's own showcase media, waits and retries when Grok rate-limits (HTTP 429), and always walks the full list so an interrupted run cannot hide older items. Not every asset row carries its prompt; those files are named after Grok's short summary or `no-prompt`.
 
 ### Pagination
 The API returns 40 items per page along with a `nextCursor` token. The script keeps calling the API with the cursor from each response until no cursor is returned. Since Grok returns favorites newest-first, the script also stops early if it hits a full page where every item is already in your download history.
